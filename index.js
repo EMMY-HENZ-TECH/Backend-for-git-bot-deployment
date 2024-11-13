@@ -1,83 +1,86 @@
+const express = require("express");
+const { exec } = require("child_process");
+const cors = require("cors");
+const bodyParser = require("body-parser");
 
-const express = require('express');
-const { exec } = require('child_process');
-const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(cors());
+app.use(bodyParser.json());
 
-// In-memory bot tracker
-let deployedBots = [];
+let deployedBots = {};
 
-// Load bots from file on startup
-if (fs.existsSync('bots.json')) {
-  deployedBots = JSON.parse(fs.readFileSync('bots.json', 'utf8'));
-}
+// Endpoint to deploy a bot
+app.post("/deploy", (req, res) => {
+  const { repo, sessionId, botName } = req.body;
 
-// API: Deploy a bot
-app.post('/deploy', (req, res) => {
-  const { repo, sessionId, name } = req.body;
-
-  if (!repo || !sessionId || !name) {
-    return res.status(400).json({ error: 'Repository link, session ID, and bot name are required.' });
+  if (!repo || !sessionId || !botName) {
+    return res.status(400).json({
+      message: "Please provide a repository link, session ID, and bot name",
+    });
   }
 
-  // Deploy the bot
-  const command = `git clone ${repo} && cd ${name} && npm install && npm start`;
+  if (deployedBots[botName]) {
+    return res.status(400).json({ message: "Bot name is already deployed!" });
+  }
+
+  const command = `
+    git clone ${repo} ${botName} &&
+    cd ${botName} &&
+    npm install &&
+    SESSION_ID=${sessionId} npm start
+  `;
+
   exec(command, (error, stdout, stderr) => {
     if (error) {
       console.error(`Error: ${error.message}`);
-      return res.status(500).json({ error: 'Deployment failed.' });
+      return res.status(500).json({ message: "Deployment failed", error });
     }
     if (stderr) {
       console.error(`Stderr: ${stderr}`);
-      return res.status(500).json({ error: 'Deployment encountered issues.' });
     }
 
-    // Track deployed bot
-    const newBot = { name, sessionId, repo, status: 'running' };
-    deployedBots.push(newBot);
-    fs.writeFileSync('bots.json', JSON.stringify(deployedBots, null, 2));
-
-    console.log(`Stdout: ${stdout}`);
-    res.json({ message: 'Bot deployed successfully', bot: newBot });
+    deployedBots[botName] = {
+      repo,
+      sessionId,
+      stdout,
+    };
+    console.log(`Bot deployed successfully: ${stdout}`);
+    res.json({ message: "Bot deployed successfully", botName });
   });
 });
 
-// API: Stop a bot
-app.post('/stop', (req, res) => {
-  const { name } = req.body;
-
-  const botIndex = deployedBots.findIndex(bot => bot.name === name);
-  if (botIndex === -1) {
-    return res.status(404).json({ error: 'Bot not found.' });
-  }
-
-  // Simulate stopping the bot (add actual logic if needed)
-  deployedBots[botIndex].status = 'stopped';
-  fs.writeFileSync('bots.json', JSON.stringify(deployedBots, null, 2));
-
-  res.json({ message: `Bot "${name}" stopped successfully.` });
-});
-
-// API: List all deployed bots
-app.get('/bots', (req, res) => {
+// Endpoint to list all deployed bots
+app.get("/bots", (req, res) => {
   res.json(deployedBots);
 });
 
-// API: Get bot details
-app.get('/bots/:name', (req, res) => {
-  const { name } = req.params;
-  const bot = deployedBots.find(bot => bot.name === name);
+// Endpoint to stop a bot
+app.post("/stop", (req, res) => {
+  const { botName } = req.body;
 
-  if (!bot) {
-    return res.status(404).json({ error: 'Bot not found.' });
+  if (!botName || !deployedBots[botName]) {
+    return res.status(400).json({ message: "Bot name not found" });
   }
 
-  res.json(bot);
+  const stopCommand = `pkill -f ${botName}`;
+  exec(stopCommand, (error) => {
+    if (error) {
+      console.error(`Error: ${error.message}`);
+      return res.status(500).json({ message: "Failed to stop the bot", error });
+    }
+
+    delete deployedBots[botName];
+    res.json({ message: `Bot ${botName} stopped successfully` });
+  });
+});
+
+// Default route
+app.get("/", (req, res) => {
+  res.json({ message: "Welcome to the WhatsApp Bot Deployment Backend" });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
